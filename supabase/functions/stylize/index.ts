@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import Replicate from "replicate";
+import OpenAI from "npm:openai@4.24.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -21,13 +21,13 @@ Deno.serve(async (req) => {
       );
     }
 
-    const replicateApiToken = Deno.env.get("REPLICATE_API_TOKEN");
-    if (!replicateApiToken) {
-      throw new Error("REPLICATE_API_TOKEN is not set");
+    const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
+    if (!openaiApiKey) {
+      throw new Error("OPENAI_API_KEY is not set");
     }
 
-    const replicate = new Replicate({
-      auth: replicateApiToken,
+    const openai = new OpenAI({
+      apiKey: openaiApiKey
     });
 
     // Check for required environment variables
@@ -38,51 +38,25 @@ Deno.serve(async (req) => {
       throw new Error("Missing Supabase environment variables");
     }
 
-    let model: string;
-    let modelInput: { input: { prompt: string; image: string; num_inference_steps: number; denoising_strength: number; } };
-
-    model = "stability-ai/sdxl:c221b2b8ef527988fb59bf24a8b97c4561f1c671f73bd389f866bfb27c061316";
+    let systemPrompt: string;
+    let userPrompt: string;
     
     switch (style) {
       case "ghibli":
-        modelInput = {
-          input: {
-            image,
-            prompt: "Studio Ghibli style anime art, Hayao Miyazaki style, soft lighting, pastel colors, masterpiece quality",
-            num_inference_steps: 50,
-            denoising_strength: 0.55
-          }
-        };
+        systemPrompt = "You are an expert in Studio Ghibli's art style and anime aesthetics. Your goal is to create detailed, evocative prompts that will help generate images capturing the essence of Hayao Miyazaki's distinctive style.";
+        userPrompt = "Create a detailed prompt for generating an image in Studio Ghibli's style. The image should have soft, warm lighting, pastel colors, and the distinctive Ghibli character design. Include specific details about lighting, atmosphere, and artistic elements that make Ghibli's style unique.";
         break;
       case "simpsons":
-        modelInput = {
-          input: {
-            image,
-            prompt: "The Simpsons style, yellow skin, cartoon art style, bright colors, Matt Groening art",
-            num_inference_steps: 50,
-            denoising_strength: 0.55
-          }
-        };
+        systemPrompt = "You are an expert in The Simpsons' distinctive art style and animation. Your goal is to create detailed prompts that capture Matt Groening's iconic character design and color palette.";
+        userPrompt = "Create a detailed prompt for generating an image in The Simpsons style. Focus on the distinctive yellow skin tone, overbite, and large eyes. Include specific details about the bold colors, line work, and characteristics that make The Simpsons style immediately recognizable.";
         break;
       case "cartoon":
-        modelInput = {
-          input: {
-            image,
-            prompt: "Disney animation style, hand-drawn cartoon, vibrant colors, classic animation",
-            num_inference_steps: 50,
-            denoising_strength: 0.55
-          }
-        };
+        systemPrompt = "You are an expert in Disney's traditional animation style. Your goal is to create detailed prompts that capture the magic and artistry of classic Disney animation.";
+        userPrompt = "Create a detailed prompt for generating an image in classic Disney animation style. Focus on the fluid lines, expressive features, and rich color palette. Include specific details about the artistic elements that make Disney's style timeless.";
         break;
       case "pixar":
-        modelInput = {
-          input: {
-            image,
-            prompt: "Pixar 3D animation style, high quality, detailed, CGI render, cinematic lighting",
-            num_inference_steps: 50,
-            denoising_strength: 0.55
-          }
-        };
+        systemPrompt = "You are an expert in Pixar's 3D animation style. Your goal is to create detailed prompts that capture Pixar's signature blend of realism and stylization.";
+        userPrompt = "Create a detailed prompt for generating an image in Pixar's style. Focus on the detailed texturing, expressive features, and cinematic lighting. Include specific details about the technical and artistic elements that make Pixar's style distinctive.";
         break;
       default:
         return new Response(
@@ -91,8 +65,29 @@ Deno.serve(async (req) => {
         );
     }
 
-    console.log('Running model:', { model, modelInput });
-    const output = await replicate.run(model, modelInput);
+    console.log('Generating prompt with GPT-4...');
+    const promptResponse = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.7,
+      max_tokens: 500
+    });
+
+    const generatedPrompt = promptResponse.choices[0].message.content;
+    console.log('Generated prompt:', generatedPrompt);
+
+    console.log('Generating image with DALL-E 3...');
+    const imageResponse = await openai.images.generate({
+      prompt: generatedPrompt,
+      n: 1,
+      size: "1024x1024",
+      model: "dall-e-3"
+    });
+
+    const output = imageResponse.data[0].url;
 
     // Create Supabase client
     const supabaseClient = createClient(

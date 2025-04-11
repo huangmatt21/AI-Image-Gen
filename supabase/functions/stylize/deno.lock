@@ -2,6 +2,7 @@
   "version": "4",
   "specifiers": {
     "npm:@supabase/supabase-js@2.39.7": "2.39.7",
+    "npm:openai@4.24.1": "4.24.1",
     "npm:openai@4.28.0": "4.28.0",
     "npm:replicate@0.25.2": "0.25.2"
   },
@@ -280,6 +281,20 @@
       "integrity": "sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A==",
       "dependencies": [
         "whatwg-url"
+      ]
+    },
+    "openai@4.24.1": {
+      "integrity": "sha512-ezm/O3eiZMnyBqirUnWm9N6INJU1WhNtz+nK/Zj/2oyKvRz9pgpViDxa5wYOtyGYXPn1sIKBV0I/S4BDhtydqw==",
+      "dependencies": [
+        "@types/node@18.19.86",
+        "@types/node-fetch",
+        "abort-controller",
+        "agentkeepalive",
+        "digest-fetch",
+        "form-data-encoder",
+        "formdata-node",
+        "node-fetch",
+        "web-streams-polyfill@3.3.3"
       ]
     },
     "openai@4.28.0": {
