@@ -1,101 +1,124 @@
-import { createClient } from "@supabase/supabase-js";
-import Replicate from "replicate";
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from '@supabase/supabase-js';
+
+interface TrainingResponse {
+  id: string;
+  detail?: string;
+  status: string;
+  progress: number;
+}
+
+interface TrainingRequest {
+  training_data_url: string;
+  trigger_word: string;
+  session_id: string;
+}
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const supabaseUrl = Deno.env.get('SUPABASE_URL');
+const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+const replicateApiToken = Deno.env.get('REPLICATE_API_TOKEN');
+
+if (!supabaseUrl || !supabaseServiceKey || !replicateApiToken) {
+  throw new Error('Missing environment variables');
+}
+
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
   }
 
   try {
-    // Check for authentication token
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: 'No authorization header' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    const { training_data_url, trigger_word, session_id } = await req.json();
+
+    if (!training_data_url || !trigger_word || !session_id) {
+      throw new Error('Missing required fields');
     }
 
-    const { image, style, imageId } = await req.json();
-
-    if (!image) {
-      return new Response(
-        JSON.stringify({ error: "Image is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const replicateApiToken = Deno.env.get("REPLICATE_API_TOKEN");
-    if (!replicateApiToken) {
-      throw new Error("REPLICATE_API_TOKEN is not set");
-    }
-
-    const replicate = new Replicate({
-      auth: replicateApiToken,
+    // Start training using FLUX
+    const response = await fetch('https://api.replicate.com/v1/trainings', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Token ${replicateApiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'ostris/flux-dev-lora-trainer',
+        input: {
+          input_images: training_data_url,
+          trigger_word: trigger_word,
+          steps: 1000,
+          learning_rate: 0.0001,
+          batch_size: 1,
+          resolution: 512,
+          autocaptioning: true
+        }
+      })
     });
 
-    // Check for required environment variables
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const training = await response.json();
 
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
-      throw new Error("Missing Supabase environment variables");
+    if (response.status !== 201) {
+      throw new Error(`Replicate API error: ${training.detail}`);
     }
 
-    if (style !== "ghibli") {
-      return new Response(
-        JSON.stringify({ error: "Invalid style" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Update training session with Replicate training ID
+    const { error: updateError } = await supabase
+      .from('training_sessions')
+      .update({
+        model_id: training.id,
+        status: 'training'
+      })
+      .eq('id', session_id);
+
+    if (updateError) {
+      throw updateError;
     }
 
-    const model = "aaronaftab/mirage-ghibli:166efd159b4138da932522bc5af40d39194033f587d9bdbab1e594119eae3e7f";
-    const modelInput = {
-      input: {
-        image,
-        prompt: "ghibli style portrait, highly detailed face, soft lighting, character portrait in the style of Hayao Miyazaki",
-        prompt_strength: 0.78 // Recommended range is 0.76-0.8
+    // Start polling for training progress
+    const pollTraining = async () => {
+      const pollResponse = await fetch(`https://api.replicate.com/v1/trainings/${training.id}`, {
+        headers: {
+          'Authorization': `Token ${replicateApiToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const pollData = await pollResponse.json();
+
+      // Update progress in database
+      await supabase
+        .from('training_sessions')
+        .update({
+          status: pollData.status,
+          progress: pollData.progress * 100 // Convert to percentage
+        })
+        .eq('id', session_id);
+
+      // If training is still running, poll again in 10 seconds
+      if (pollData.status === 'processing') {
+        setTimeout(pollTraining, 10000);
       }
     };
 
-    console.log('Running model:', { model, modelInput });
-    const output = await replicate.run(model, modelInput);
+    // Start polling
+    pollTraining();
 
-    // Create Supabase client
-    const supabaseClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-    );
+    return new Response(JSON.stringify({ training_id: training.id }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
 
-    // Update the image record with the processed URL
-    if (imageId) {
-      const { error: updateError } = await supabaseClient
-        .from('images')
-        .update({
-          processed_url: output,
-          status: 'completed'
-        })
-        .eq('id', imageId);
-
-      if (updateError) {
-        console.error('Error updating image record:', updateError);
-      }
-    }
-
-    return new Response(
-      JSON.stringify({ url: output }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  } catch (error) {
-    return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 });

@@ -1,18 +1,19 @@
-# AI Image Style Transfer
+# AI Photorealistic Generator
 
-A web application that transforms your images into different artistic styles using AI. Built with React, Supabase, and Stable Diffusion.
+A web application that creates a photorealistic AI model of yourself using multiple training images. Built with React, Supabase, and the FLUX framework.
 
 ## Features
 
-- Upload and preview images
-- Multiple style options:
-  - Studio Ghibli
-  - The Simpsons
-  - Disney Cartoon
-  - Pixar 3D
-- Automatic image resizing
-- Real-time processing status
-- Side-by-side result comparison
+- Upload and preview multiple training images (12-20 required)
+- Automatic trigger word generation
+- Image requirements guide:
+  - Different facial expressions
+  - Various angles
+  - Different lighting conditions
+  - Various backgrounds
+- Real-time training progress tracking
+- Automatic image resizing and optimization
+- Secure model training and storage
 
 ## Tech Stack
 
@@ -21,9 +22,11 @@ A web application that transforms your images into different artistic styles usi
   - Vite
   - Tailwind CSS
   - React Router
+  - JSZip for image bundling
 - Backend:
   - Supabase (Storage, Database, Edge Functions)
-  - Replicate API (Stable Diffusion XL)
+  - Replicate API (FLUX framework)
+  - Deno Runtime for Edge Functions
 
 ## Setup
 

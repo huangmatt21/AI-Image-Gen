@@ -1,50 +1,52 @@
 import { useState, useRef, useEffect } from 'react';
+import JSZip from 'jszip';
 import { useNavigate } from 'react-router-dom';
 import { Upload as UploadIcon } from 'lucide-react';
 import { Button } from '../components/Button';
 import { supabase } from '../lib/supabase';
 
-const STYLES = [
-  { id: 'ghibli', name: 'Studio Ghibli', description: 'Transform your photo into a magical Ghibli-style portrait' },
+const MIN_IMAGES = 12;
+const MAX_IMAGES = 20;
+
+const IMAGE_REQUIREMENTS = [
+  'Different facial expressions (smiling, neutral, serious)',
+  'Various angles (front, profile, 3/4 view)',
+  'Different lighting conditions',
+  'Various backgrounds',
+  'High-quality, clear photos',
 ];
 
 export function Upload() {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [selectedStyle, setSelectedStyle] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [trainingImages, setTrainingImages] = useState<File[]>([]);
+  const [triggerWord, setTriggerWord] = useState<string>('');
+  const [isTraining, setIsTraining] = useState(false);
+  const [trainingProgress, setTrainingProgress] = useState(0);
   const [error, setError] = useState<string>('');
+  const [userId, setUserId] = useState<string | null>(null);
 
+  // Generate default trigger word on mount
+  useEffect(() => {
+    setTriggerWord(`PERSON_${Math.random().toString(36).substring(2, 7).toUpperCase()}`);
+  }, []);
   useEffect(() => {
     const initAuth = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-          // Try to sign in anonymously
-          const { error } = await supabase.auth.signInAnonymously();
-          if (error) {
-            if (error.status === 422 && error.message.includes('anonymous_provider_disabled')) {
-              // If anonymous auth is disabled, create a temporary session
-              const { error: signUpError } = await supabase.auth.signUp({
-                email: `temp_${Math.random().toString(36).slice(2)}@temp.com`,
-                password: Math.random().toString(36).slice(2)
-              });
-              if (signUpError) {
-                throw signUpError;
-              }
-            } else {
-              throw error;
-            }
-          }
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          navigate('/login');
+        } else {
+          setUserId(user.id);
         }
-      } catch (error) {
-        console.error('Auth error:', error);
-        setError('Authentication failed. Please try again.');
+      } catch (err) {
+        console.error('Error checking auth:', err);
+        navigate('/login');
       }
     };
+
     initAuth();
-  }, []);
+  }, [navigate]);
 
   const resizeImage = async (file: File, maxWidth = 1024, maxHeight = 1024): Promise<Blob> => {
     return new Promise((resolve, reject) => {
@@ -89,156 +91,134 @@ export function Upload() {
   };
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      try {
-        const resizedBlob = await resizeImage(file);
-        const resizedFile = new File([resizedBlob], file.name, { type: 'image/jpeg' });
-        setSelectedFile(resizedFile);
-        setError('');
-      } catch (err) {
-        console.error('Error resizing image:', err);
-        setError('Failed to process image. Please try a different one.');
-      }
-    }
-  };
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
 
-  const handleStyleSelect = (styleId: string) => {
-    setSelectedStyle(styleId);
-    setError('');
-  };
-
-  const handleSubmit = async () => {
-    if (!selectedFile || !selectedStyle) {
-      setError('Please select both an image and a style');
+    if (files.length + trainingImages.length > MAX_IMAGES) {
+      setError(`You can only upload up to ${MAX_IMAGES} images. Please remove some images first.`);
       return;
     }
 
-    setIsLoading(true);
-    setError('');
+    try {
+      const resizedFiles = await Promise.all(
+        files.map(async (file) => {
+          const resizedBlob = await resizeImage(file);
+          return new File([resizedBlob], file.name, { type: 'image/jpeg' });
+        })
+      );
+
+      setTrainingImages(prev => [...prev, ...resizedFiles]);
+      setError('');
+    } catch (err) {
+      console.error('Error processing images:', err);
+      setError('Failed to process images. Please try again with different images.');
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setTrainingImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const regenerateTriggerWord = () => {
+    const newTriggerWord = `PERSON_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    setTriggerWord(newTriggerWord);
+  };
+
+  const handleSubmit = async () => {
+    if (!userId || trainingImages.length < MIN_IMAGES || !triggerWord) return;
 
     try {
-      console.log('Starting image upload process...');
-      
-      // 1. Check authentication
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      console.log('Auth check result:', { user: authData?.user, error: authError });
-      
-      if (!authData.user) {
-        throw new Error('User not authenticated');
+      setIsTraining(true);
+      setError('');
+
+      // Create a zip file of all images
+      const zip = new JSZip();
+      const imageFolder = zip.folder('training_images');
+
+      // Add each image to the zip
+      for (let i = 0; i < trainingImages.length; i++) {
+        const file = trainingImages[i];
+        imageFolder?.file(`image_${i + 1}.jpg`, file);
       }
 
-      const fileExt = selectedFile.name.split('.').pop();
-      const fileName = `${Math.random()}.${fileExt}`;
-      const filePath = `${authData.user.id}/${fileName}`;
+      // Generate zip file
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const zipFile = new File([zipBlob], 'training_images.zip', { type: 'application/zip' });
 
-      // List buckets to check if 'originals' exists
-      const { data: bucketList, error: listError } = await supabase.storage
-        .listBuckets();
-      console.log('Available buckets:', bucketList);
-
-      if (listError) {
-        console.error('Error listing buckets:', listError);
-        throw new Error('Failed to check storage configuration');
-      }
-
-      const imagesBucket = bucketList?.find(bucket => bucket.name === 'images');
-      if (!imagesBucket) {
-        console.error('Images bucket not found in:', bucketList?.map(b => b.name));
-        throw new Error('Storage bucket not found. Please check your Supabase storage configuration.');
-      }
-
-      console.log('Attempting file upload:', { filePath });
+      // Upload zip to Supabase Storage
       const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('images')
-        .upload(filePath, selectedFile);
-      
-      console.log('Upload result:', { data: uploadData, error: uploadError });
+        .from('training_data')
+        .upload(`${userId}/${triggerWord}/${Date.now()}.zip`, zipFile);
 
       if (uploadError) {
-        if (uploadError.message.includes('Bucket not found')) {
-          throw new Error('Storage is not configured. Please try again later.');
-        }
-        throw uploadError;
+        throw new Error('Failed to upload training data');
       }
 
-      // 2. Get the public URL of the uploaded image
-      const { data: { publicUrl: originalUrl } } = supabase.storage
-        .from('images')
-        .getPublicUrl(filePath);
+      // Get the public URL of the uploaded zip
+      const { data: { publicUrl } } = await supabase.storage
+        .from('training_data')
+        .getPublicUrl(uploadData.path);
 
-      // 3. Create a record in the images table
-      const { data: imageRecord, error: insertError } = await supabase
-        .from('images')
+      // Save training record to database
+      const { data: trainingData, error: insertError } = await supabase
+        .from('training_sessions')
         .insert({
-          user_id: authData.user.id,
-          original_url: originalUrl,
-          status: 'pending'
+          user_id: userId,
+          trigger_word: triggerWord,
+          training_data_url: publicUrl,
+          status: 'processing',
+          num_images: trainingImages.length
         })
         .select()
         .single();
 
       if (insertError) {
-        throw insertError;
+        throw new Error('Failed to save training record');
       }
 
-      // 4. Call the edge function to process the image
-      console.log('Calling edge function with:', { originalUrl, style: selectedStyle, imageId: imageRecord.id });
-      // Get the current session
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        throw new Error('No active session');
-      }
-
-      const response = await fetch('http://localhost:8000', {
+      // Start training process via Edge Function
+      const response = await fetch('http://localhost:8000/train', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          image: originalUrl,
-          style: selectedStyle,
-          imageId: imageRecord.id
+          training_data_url: publicUrl,
+          trigger_word: triggerWord,
+          session_id: trainingData.id
         })
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to process image');
+        throw new Error('Failed to start training');
       }
 
-      const data = await response.json();
+      // Poll for training progress
+      const pollInterval = setInterval(async () => {
+        const { data: session } = await supabase
+          .from('training_sessions')
+          .select('status, progress')
+          .eq('id', trainingData.id)
+          .single();
 
-      // 5. Update the image record with the processed URL
-      const { error: updateError } = await supabase
-        .from('images')
-        .update({
-          processed_url: data.url,
-          status: 'completed'
-        })
-        .eq('id', imageRecord.id);
+        if (session) {
+          setTrainingProgress(session.progress || 0);
 
-      if (updateError) {
-        throw updateError;
-      }
+          if (session.status === 'completed') {
+            clearInterval(pollInterval);
+            navigate(`/generate/${trainingData.id}`);
+          } else if (session.status === 'failed') {
+            clearInterval(pollInterval);
+            setError('Training failed. Please try again.');
+            setIsTraining(false);
+          }
+        }
+      }, 5000); // Poll every 5 seconds
 
-      navigate('/result', { 
-        state: { 
-          originalImage: originalUrl,
-          stylizedImage: data.url 
-        } 
-      });
-    } catch (err: any) {
-      console.error('Error details:', {
-        error: err,
-        message: err.message,
-        stack: err.stack,
-        cause: err.cause
-      });
-      setError(`Failed to generate image: ${err.message || 'Unknown error occurred'}`);
-    } finally {
-      setIsLoading(false);
+    } catch (err) {
+      console.error('Error:', err);
+      setError('Something went wrong. Please try again.');
+      setIsTraining(false);
     }
   };
 
@@ -246,56 +226,90 @@ export function Upload() {
     <div className="min-h-screen bg-gray-50 p-4">
       <div className="max-w-4xl mx-auto space-y-8">
         <div className="text-center space-y-4">
-          <h1 className="text-3xl font-bold text-gray-900">Create Your Artwork</h1>
-          <p className="text-gray-600">Upload a photo and choose your preferred style</p>
+          <h1 className="text-3xl font-bold text-gray-900">Create Your AI Portrait Model</h1>
+          <p className="text-gray-600">Upload 12-20 photos of yourself in different poses and lighting</p>
         </div>
 
         <div className="bg-white rounded-lg shadow-md p-6 space-y-6">
+          {/* Image Requirements */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <h3 className="font-semibold text-blue-800 mb-2">Photo Requirements:</h3>
+            <ul className="list-disc list-inside space-y-1 text-blue-700">
+              {IMAGE_REQUIREMENTS.map((req, index) => (
+                <li key={index}>{req}</li>
+              ))}
+            </ul>
+            <p className="mt-2 text-blue-600 font-medium">
+              Current: {trainingImages.length} / {MIN_IMAGES} required ({MAX_IMAGES} max)
+            </p>
+          </div>
+
+          {/* Image Upload Area */}
           <div 
             className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-purple-500 transition-colors"
             onClick={() => fileInputRef.current?.click()}
           >
-            {selectedFile ? (
-              <div className="space-y-4">
-                <img 
-                  src={URL.createObjectURL(selectedFile)} 
-                  alt="Preview" 
-                  className="max-h-64 mx-auto rounded"
-                />
-                <p className="text-sm text-gray-500">Click to change image</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <UploadIcon className="w-12 h-12 text-gray-400 mx-auto" />
-                <p className="text-gray-500">Click to upload your photo</p>
-              </div>
-            )}
+            <div className="space-y-4">
+              <UploadIcon className="w-12 h-12 text-gray-400 mx-auto" />
+              <p className="text-gray-500">Click to add more photos</p>
+            </div>
             <input
               ref={fileInputRef}
               type="file"
               accept="image/*"
+              multiple
               className="hidden"
               onChange={handleFileChange}
             />
           </div>
 
-          <div className="space-y-4">
-            <h2 className="text-xl font-semibold text-gray-900">Choose a Style</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {STYLES.map((style) => (
-                <button
-                  key={style.id}
-                  className={`p-4 rounded-lg border-2 text-left transition-colors ${
-                    selectedStyle === style.id
-                      ? 'border-purple-500 bg-purple-50'
-                      : 'border-gray-200 hover:border-purple-300'
-                  }`}
-                  onClick={() => handleStyleSelect(style.id)}
-                >
-                  <h3 className="font-semibold text-gray-900">{style.name}</h3>
-                  <p className="text-sm text-gray-500">{style.description}</p>
-                </button>
+          {/* Image Preview Grid */}
+          {trainingImages.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+              {trainingImages.map((file, index) => (
+                <div key={index} className="relative group">
+                  <img
+                    src={URL.createObjectURL(file)}
+                    alt={`Training image ${index + 1}`}
+                    className="w-full h-32 object-cover rounded-lg"
+                  />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeImage(index);
+                    }}
+                    className="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    ×
+                  </button>
+                </div>
               ))}
+            </div>
+          )}
+
+          {/* Trigger Word Input */}
+          <div className="space-y-4">
+            <h2 className="text-xl font-semibold text-gray-900">Set Your Trigger Word</h2>
+            <div className="flex items-center gap-4">
+              <input
+                type="text"
+                value={triggerWord}
+                onChange={(e) => setTriggerWord(e.target.value.toUpperCase())}
+                className="flex-1 px-4 py-2 border rounded-lg font-mono"
+                placeholder="PERSON_XYZ123"
+              />
+              <Button
+                onClick={regenerateTriggerWord}
+                className="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700"
+              >
+                Generate New
+              </Button>
+            </div>
+            <div className="text-sm text-gray-500">
+              <p>This word will be used to identify you in prompts. For example:</p>
+              <p className="mt-1 font-mono bg-gray-100 p-2 rounded">
+                "A photo of {triggerWord} in a business suit"
+              </p>
             </div>
           </div>
 
@@ -308,18 +322,18 @@ export function Upload() {
               size="lg"
               className="bg-purple-600 hover:bg-purple-700 text-white font-semibold"
               onClick={handleSubmit}
-              disabled={isLoading || !selectedFile || !selectedStyle}
+              disabled={isTraining || trainingImages.length < MIN_IMAGES || !triggerWord}
             >
-              {isLoading ? (
+              {isTraining ? (
                 <span className="flex items-center">
                   <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  Generating...
+                  Training Model ({Math.round(trainingProgress)}%)
                 </span>
               ) : (
-                'Generate Artwork'
+                'Start Training'
               )}
             </Button>
           </div>
