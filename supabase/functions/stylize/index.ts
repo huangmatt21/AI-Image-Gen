@@ -1,17 +1,27 @@
 import { createClient } from "@supabase/supabase-js";
-import OpenAI from "npm:openai@4.24.1";
+import Replicate from "replicate";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-Deno.serve(async (req) => {
+serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    // Check for authentication token
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ error: 'No authorization header' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const { image, style, imageId } = await req.json();
 
     if (!image) {
@@ -21,13 +31,13 @@ Deno.serve(async (req) => {
       );
     }
 
-    const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
-    if (!openaiApiKey) {
-      throw new Error("OPENAI_API_KEY is not set");
+    const replicateApiToken = Deno.env.get("REPLICATE_API_TOKEN");
+    if (!replicateApiToken) {
+      throw new Error("REPLICATE_API_TOKEN is not set");
     }
 
-    const openai = new OpenAI({
-      apiKey: openaiApiKey
+    const replicate = new Replicate({
+      auth: replicateApiToken,
     });
 
     // Check for required environment variables
@@ -38,56 +48,24 @@ Deno.serve(async (req) => {
       throw new Error("Missing Supabase environment variables");
     }
 
-    let systemPrompt: string;
-    let userPrompt: string;
-    
-    switch (style) {
-      case "ghibli":
-        systemPrompt = "You are an expert in Studio Ghibli's art style and anime aesthetics. Your goal is to create detailed, evocative prompts that will help generate images capturing the essence of Hayao Miyazaki's distinctive style.";
-        userPrompt = "Create a detailed prompt for generating an image in Studio Ghibli's style. The image should have soft, warm lighting, pastel colors, and the distinctive Ghibli character design. Include specific details about lighting, atmosphere, and artistic elements that make Ghibli's style unique.";
-        break;
-      case "simpsons":
-        systemPrompt = "You are an expert in The Simpsons' distinctive art style and animation. Your goal is to create detailed prompts that capture Matt Groening's iconic character design and color palette.";
-        userPrompt = "Create a detailed prompt for generating an image in The Simpsons style. Focus on the distinctive yellow skin tone, overbite, and large eyes. Include specific details about the bold colors, line work, and characteristics that make The Simpsons style immediately recognizable.";
-        break;
-      case "cartoon":
-        systemPrompt = "You are an expert in Disney's traditional animation style. Your goal is to create detailed prompts that capture the magic and artistry of classic Disney animation.";
-        userPrompt = "Create a detailed prompt for generating an image in classic Disney animation style. Focus on the fluid lines, expressive features, and rich color palette. Include specific details about the artistic elements that make Disney's style timeless.";
-        break;
-      case "pixar":
-        systemPrompt = "You are an expert in Pixar's 3D animation style. Your goal is to create detailed prompts that capture Pixar's signature blend of realism and stylization.";
-        userPrompt = "Create a detailed prompt for generating an image in Pixar's style. Focus on the detailed texturing, expressive features, and cinematic lighting. Include specific details about the technical and artistic elements that make Pixar's style distinctive.";
-        break;
-      default:
-        return new Response(
-          JSON.stringify({ error: "Invalid style" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+    if (style !== "ghibli") {
+      return new Response(
+        JSON.stringify({ error: "Invalid style" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
-    console.log('Generating prompt with GPT-4...');
-    const promptResponse = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ],
-      temperature: 0.7,
-      max_tokens: 500
-    });
+    const model = "aaronaftab/mirage-ghibli:166efd159b4138da932522bc5af40d39194033f587d9bdbab1e594119eae3e7f";
+    const modelInput = {
+      input: {
+        image,
+        prompt: "ghibli style portrait, highly detailed face, soft lighting, character portrait in the style of Hayao Miyazaki",
+        prompt_strength: 0.78 // Recommended range is 0.76-0.8
+      }
+    };
 
-    const generatedPrompt = promptResponse.choices[0].message.content;
-    console.log('Generated prompt:', generatedPrompt);
-
-    console.log('Generating image with DALL-E 3...');
-    const imageResponse = await openai.images.generate({
-      prompt: generatedPrompt,
-      n: 1,
-      size: "1024x1024",
-      model: "dall-e-3"
-    });
-
-    const output = imageResponse.data[0].url;
+    console.log('Running model:', { model, modelInput });
+    const output = await replicate.run(model, modelInput);
 
     // Create Supabase client
     const supabaseClient = createClient(

@@ -5,10 +5,7 @@ import { Button } from '../components/Button';
 import { supabase } from '../lib/supabase';
 
 const STYLES = [
-  { id: 'ghibli', name: 'Studio Ghibli', description: 'Magical anime style' },
-  { id: 'simpsons', name: 'The Simpsons', description: 'Yellow cartoon style' },
-  { id: 'cartoon', name: 'Cartoon', description: 'Classic cartoon look' },
-  { id: 'pixar', name: 'Pixar', description: '3D animated style' },
+  { id: 'ghibli', name: 'Studio Ghibli', description: 'Transform your photo into a magical Ghibli-style portrait' },
 ];
 
 export function Upload() {
@@ -187,10 +184,16 @@ export function Upload() {
 
       // 4. Call the edge function to process the image
       console.log('Calling edge function with:', { originalUrl, style: selectedStyle, imageId: imageRecord.id });
+      // Get the current session
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
       const response = await fetch('http://localhost:8000', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'Authorization': `Bearer ${session.access_token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
