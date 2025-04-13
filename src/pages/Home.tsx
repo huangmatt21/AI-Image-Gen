@@ -15,7 +15,7 @@ export function Home() {
           Transform Your Photos with AI Magic
         </h1>
         <p className="text-xl text-gray-300">
-          Turn your photos into stunning artwork inspired by your favorite styles - Ghibli, Simpsons, Cartoon, or Pixar.
+          Turn your photos into stunning AI-generated headshots with just a few clicks. Upload 12-20 photos to get started.
         </p>
         <Button
           size="lg"

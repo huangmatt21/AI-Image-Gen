@@ -1,337 +1,288 @@
 import { useState, useRef, useEffect } from 'react';
-import JSZip from 'jszip';
+import { X, UploadIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { Upload as UploadIcon } from 'lucide-react';
 import { Button } from '../components/Button';
+import JSZip from 'jszip';
 import { supabase } from '../lib/supabase';
 
 const MIN_IMAGES = 12;
 const MAX_IMAGES = 20;
 
-const IMAGE_REQUIREMENTS = [
-  'Different facial expressions (smiling, neutral, serious)',
-  'Various angles (front, profile, 3/4 view)',
-  'Different lighting conditions',
-  'Various backgrounds',
-  'High-quality, clear photos',
+const ZIP_REQUIREMENTS = [
+  'ZIP file containing 12-20 photos',
+  'Photos should include:',
+  '- Different facial expressions (smiling, neutral, serious)',
+  '- Various angles (front, profile, 3/4 view)',
+  '- Different lighting conditions',
+  '- Various backgrounds',
+  '- High-quality, clear photos',
 ];
 
 export function Upload() {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [trainingImages, setTrainingImages] = useState<File[]>([]);
+  const [zipFile, setZipFile] = useState<File | null>(null);
+  const [imageCount, setImageCount] = useState<number>(0);
   const [triggerWord, setTriggerWord] = useState<string>('');
   const [isTraining, setIsTraining] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState(0);
   const [error, setError] = useState<string>('');
   const [userId, setUserId] = useState<string | null>(null);
 
-  // Generate default trigger word on mount
+  // Initialize trigger word
   useEffect(() => {
-    setTriggerWord(`PERSON_${Math.random().toString(36).substring(2, 7).toUpperCase()}`);
+    setUserId('demo-user'); // Use a demo user ID
+    regenerateTriggerWord();
   }, []);
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          navigate('/login');
-        } else {
-          setUserId(user.id);
-        }
-      } catch (err) {
-        console.error('Error checking auth:', err);
-        navigate('/login');
-      }
-    };
-
-    initAuth();
-  }, [navigate]);
-
-  const resizeImage = async (file: File, maxWidth = 1024, maxHeight = 1024): Promise<Blob> => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.src = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(img.src);
-        let width = img.width;
-        let height = img.height;
-
-        if (width > maxWidth || height > maxHeight) {
-          const ratio = Math.min(maxWidth / width, maxHeight / height);
-          width *= ratio;
-          height *= ratio;
-        }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('Could not get canvas context'));
-          return;
-        }
-
-        ctx.drawImage(img, 0, 0, width, height);
-        canvas.toBlob(
-          (blob) => {
-            if (blob) {
-              resolve(blob);
-            } else {
-              reject(new Error('Failed to create blob'));
-            }
-          },
-          'image/jpeg',
-          0.9
-        );
-      };
-      img.onerror = () => reject(new Error('Failed to load image'));
-    });
-  };
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || []);
-    if (files.length === 0) return;
+    const file = event.target.files?.[0];
+    if (!file) return;
 
-    if (files.length + trainingImages.length > MAX_IMAGES) {
-      setError(`You can only upload up to ${MAX_IMAGES} images. Please remove some images first.`);
+    if (file.type !== 'application/zip') {
+      setError('Please upload a ZIP file containing your photos.');
       return;
     }
 
     try {
-      const resizedFiles = await Promise.all(
-        files.map(async (file) => {
-          const resizedBlob = await resizeImage(file);
-          return new File([resizedBlob], file.name, { type: 'image/jpeg' });
+      const zip = new JSZip();
+      const contents = await zip.loadAsync(file);
+      const allFiles = Object.values(contents.files);
+      
+      // Filter out macOS system files and get unique paths
+      const imageFiles = allFiles
+        .filter(f => {
+          // Exclude macOS system files and directories
+          const isMacSystemFile = f.name.startsWith('__MACOSX/') || f.name.includes('.DS_Store');
+          const isImageFile = !f.dir && f.name.match(/\.(jpg|jpeg|png)$/i);
+          return !isMacSystemFile && isImageFile;
         })
-      );
+        // Get unique files by base name to handle duplicates
+        .filter((f, index, self) => 
+          index === self.findIndex((t) => 
+            t.name.split('/').pop() === f.name.split('/').pop()
+          )
+        );
 
-      setTrainingImages(prev => [...prev, ...resizedFiles]);
+      console.log('All files in ZIP:', allFiles.map(f => f.name));
+      console.log('Filtered image files:', imageFiles.map(f => f.name));
+      console.log('Number of unique image files:', imageFiles.length);
+
+      if (imageFiles.length < MIN_IMAGES) {
+        setError(`Not enough images. Found ${imageFiles.length}, but need at least ${MIN_IMAGES} images.`);
+        return;
+      }
+      if (imageFiles.length > MAX_IMAGES) {
+        setError(`Too many images. Found ${imageFiles.length}, but maximum allowed is ${MAX_IMAGES} images. Please remove some images from your ZIP file.`);
+        return;
+      }
+
+      setZipFile(file);
+      setImageCount(imageFiles.length);
       setError('');
     } catch (err) {
-      console.error('Error processing images:', err);
-      setError('Failed to process images. Please try again with different images.');
+      console.error('Error processing ZIP file:', err);
+      setError('Failed to process ZIP file. Please make sure it\'s a valid ZIP archive.');
     }
   };
 
-  const removeImage = (index: number) => {
-    setTrainingImages(prev => prev.filter((_, i) => i !== index));
-  };
-
   const regenerateTriggerWord = () => {
-    const newTriggerWord = `PERSON_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-    setTriggerWord(newTriggerWord);
+    const adjectives = ['creative', 'dynamic', 'elegant', 'vibrant', 'sleek'];
+    const nouns = ['portrait', 'headshot', 'photo', 'image', 'snapshot'];
+    const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+    const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
+    const randomNum = Math.floor(Math.random() * 1000);
+    setTriggerWord(`${randomAdjective}_${randomNoun}_${randomNum}`);
   };
 
   const handleSubmit = async () => {
-    if (!userId || trainingImages.length < MIN_IMAGES || !triggerWord) return;
+    if (!userId || !zipFile || !triggerWord) return;
 
     try {
       setIsTraining(true);
       setError('');
 
-      // Create a zip file of all images
-      const zip = new JSZip();
-      const imageFolder = zip.folder('training_images');
+      const bucketName = 'training-images';
+      
+      // First check if bucket exists
+      const { data: buckets } = await supabase.storage.listBuckets();
+      const bucketExists = buckets?.some(b => b.name === bucketName);
 
-      // Add each image to the zip
-      for (let i = 0; i < trainingImages.length; i++) {
-        const file = trainingImages[i];
-        imageFolder?.file(`image_${i + 1}.jpg`, file);
+      if (!bucketExists) {
+        // Create bucket if it doesn't exist
+        const { error: createError } = await supabase.storage.createBucket(bucketName, {
+          public: true,
+          fileSizeLimit: null
+        });
+
+        if (createError) {
+          throw new Error(`Failed to create bucket: ${createError.message}`);
+        }
       }
 
-      // Generate zip file
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const zipFile = new File([zipBlob], 'training_images.zip', { type: 'application/zip' });
+      // Upload to the training-images bucket
+      const { error: uploadError } = await supabase.storage
+        .from(bucketName)
+        .upload(`${userId}/${triggerWord}.zip`, zipFile, {
+          cacheControl: '3600',
+          upsert: false
+        });
 
-      // Upload zip to Supabase Storage
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('training_data')
-        .upload(`${userId}/${triggerWord}/${Date.now()}.zip`, zipFile);
-
+      // Check for upload errors
       if (uploadError) {
-        throw new Error('Failed to upload training data');
+        throw new Error(`Failed to upload images: ${uploadError.message}`);
       }
 
-      // Get the public URL of the uploaded zip
-      const { data: { publicUrl } } = await supabase.storage
-        .from('training_data')
-        .getPublicUrl(uploadData.path);
+      // Get the URL of the uploaded file
+      const { data: { publicUrl } } = supabase.storage
+        .from(bucketName)
+        .getPublicUrl(`${userId}/${triggerWord}.zip`);
 
-      // Save training record to database
-      const { data: trainingData, error: insertError } = await supabase
-        .from('training_sessions')
-        .insert({
-          user_id: userId,
-          trigger_word: triggerWord,
-          training_data_url: publicUrl,
-          status: 'processing',
-          num_images: trainingImages.length
-        })
-        .select()
-        .single();
-
-      if (insertError) {
-        throw new Error('Failed to save training record');
-      }
-
-      // Start training process via Edge Function
-      const response = await fetch('http://localhost:8000/train', {
+      // Start the training process
+      const response = await fetch('http://localhost:8000/stylize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          training_data_url: publicUrl,
-          trigger_word: triggerWord,
-          session_id: trainingData.id
-        })
+          userId,
+          triggerWord,
+          imageUrl: publicUrl,
+        }),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to start training');
+        throw new Error(`Training failed: ${response.statusText}`);
       }
 
-      // Poll for training progress
+      const result = await response.json();
+      console.log('Training started:', result);
+
+      // Poll for training status
       const pollInterval = setInterval(async () => {
-        const { data: session } = await supabase
-          .from('training_sessions')
-          .select('status, progress')
-          .eq('id', trainingData.id)
-          .single();
+        const pollResponse = await fetch(`http://localhost:8000/status/${result.id}`);
+        const pollResult = await pollResponse.json();
 
-        if (session) {
-          setTrainingProgress(session.progress || 0);
-
-          if (session.status === 'completed') {
-            clearInterval(pollInterval);
-            navigate(`/generate/${trainingData.id}`);
-          } else if (session.status === 'failed') {
-            clearInterval(pollInterval);
-            setError('Training failed. Please try again.');
-            setIsTraining(false);
-          }
+        if (pollResult.status === 'completed') {
+          clearInterval(pollInterval);
+          setIsTraining(false);
+          navigate('/result', { state: { modelId: result.id } });
+        } else if (pollResult.status === 'failed') {
+          clearInterval(pollInterval);
+          setIsTraining(false);
+          setError('Training failed. Please try again.');
+        } else {
+          setTrainingProgress(pollResult.progress || 0);
         }
-      }, 5000); // Poll every 5 seconds
-
+      }, 5000);
     } catch (err) {
-      console.error('Error:', err);
-      setError('Something went wrong. Please try again.');
+      console.error('Error during training:', err);
+      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
       setIsTraining(false);
     }
   };
 
   return (
     <div className="min-h-screen bg-gray-50 p-4">
-      <div className="max-w-4xl mx-auto space-y-8">
+      <div className="max-w-4xl mx-auto p-6 space-y-8">
         <div className="text-center space-y-4">
           <h1 className="text-3xl font-bold text-gray-900">Create Your AI Portrait Model</h1>
-          <p className="text-gray-600">Upload 12-20 photos of yourself in different poses and lighting</p>
+          <p className="text-gray-600">Upload a ZIP file containing 12-20 photos of yourself</p>
         </div>
 
         <div className="bg-white rounded-lg shadow-md p-6 space-y-6">
-          {/* Image Requirements */}
+          {/* Upload Requirements */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
             <h3 className="font-semibold text-blue-800 mb-2">Photo Requirements:</h3>
             <ul className="list-disc list-inside space-y-1 text-blue-700">
-              {IMAGE_REQUIREMENTS.map((req, index) => (
+              {ZIP_REQUIREMENTS.map((req, index) => (
                 <li key={index}>{req}</li>
               ))}
             </ul>
-            <p className="mt-2 text-blue-600 font-medium">
-              Current: {trainingImages.length} / {MIN_IMAGES} required ({MAX_IMAGES} max)
-            </p>
           </div>
 
-          {/* Image Upload Area */}
+          {/* ZIP Upload Area */}
           <div 
             className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-purple-500 transition-colors"
             onClick={() => fileInputRef.current?.click()}
           >
-            <div className="space-y-4">
-              <UploadIcon className="w-12 h-12 text-gray-400 mx-auto" />
-              <p className="text-gray-500">Click to add more photos</p>
-            </div>
+            <UploadIcon className="w-12 h-12 text-gray-400 mx-auto" />
+            <p className="text-gray-500 mt-2">
+              {zipFile ? 'Click to replace ZIP file' : 'Click to upload ZIP file'}
+            </p>
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
-              multiple
+              accept=".zip"
               className="hidden"
               onChange={handleFileChange}
             />
           </div>
 
-          {/* Image Preview Grid */}
-          {trainingImages.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-              {trainingImages.map((file, index) => (
-                <div key={index} className="relative group">
-                  <img
-                    src={URL.createObjectURL(file)}
-                    alt={`Training image ${index + 1}`}
-                    className="w-full h-32 object-cover rounded-lg"
-                  />
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeImage(index);
-                    }}
-                    className="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    ×
-                  </button>
+          {/* ZIP File Preview */}
+          {zipFile && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-lg font-semibold text-gray-900">{zipFile.name}</p>
+                  <p className="text-sm text-gray-500">{imageCount} images detected</p>
                 </div>
-              ))}
+                <button
+                  onClick={() => {
+                    setZipFile(null);
+                    setImageCount(0);
+                    if (fileInputRef.current) {
+                      fileInputRef.current.value = '';
+                    }
+                  }}
+                  className="text-red-500 hover:text-red-400"
+                >
+                  <X size={20} />
+                </button>
+              </div>
             </div>
           )}
 
           {/* Trigger Word Input */}
-          <div className="space-y-4">
-            <h2 className="text-xl font-semibold text-gray-900">Set Your Trigger Word</h2>
-            <div className="flex items-center gap-4">
+          <div className="space-y-2">
+            <label htmlFor="trigger-word" className="block text-sm font-medium text-gray-700">
+              Trigger Word
+            </label>
+            <div className="flex gap-2">
               <input
+                id="trigger-word"
                 type="text"
                 value={triggerWord}
-                onChange={(e) => setTriggerWord(e.target.value.toUpperCase())}
-                className="flex-1 px-4 py-2 border rounded-lg font-mono"
-                placeholder="PERSON_XYZ123"
+                onChange={(e) => setTriggerWord(e.target.value)}
+                className="flex-1 rounded-lg border border-gray-300 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                placeholder="Enter a unique word to identify your model"
               />
               <Button
                 onClick={regenerateTriggerWord}
-                className="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700"
+                variant="outline"
+                className="px-4 py-2"
               >
-                Generate New
+                Regenerate
               </Button>
-            </div>
-            <div className="text-sm text-gray-500">
-              <p>This word will be used to identify you in prompts. For example:</p>
-              <p className="mt-1 font-mono bg-gray-100 p-2 rounded">
-                "A photo of {triggerWord} in a business suit"
-              </p>
             </div>
           </div>
 
           {error && (
-            <p className="text-red-500 text-center">{error}</p>
+            <p className="text-red-500 text-center mt-4">{error}</p>
           )}
 
-          <div className="flex justify-center">
+          {/* Submit Button */}
+          <div className="flex justify-end mt-6">
             <Button
-              size="lg"
-              className="bg-purple-600 hover:bg-purple-700 text-white font-semibold"
               onClick={handleSubmit}
-              disabled={isTraining || trainingImages.length < MIN_IMAGES || !triggerWord}
+              disabled={isTraining || !zipFile || !triggerWord}
+              className="px-6 py-2"
             >
               {isTraining ? (
-                <span className="flex items-center">
-                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Training Model ({Math.round(trainingProgress)}%)
-                </span>
+                <div className="flex items-center gap-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                  Training... {Math.round(trainingProgress * 100)}%
+                </div>
               ) : (
                 'Start Training'
               )}

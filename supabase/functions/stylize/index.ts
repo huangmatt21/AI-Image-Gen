@@ -30,13 +30,47 @@ if (!supabaseUrl || !supabaseServiceKey || !replicateApiToken) {
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 serve(async (req) => {
+  // Add CORS headers to all responses
+  const responseHeaders = {
+    ...corsHeaders,
+    'Content-Type': 'application/json'
+  };
+
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response(null, { headers: responseHeaders });
+  }
+
+  // Only accept POST requests
+  if (req.method !== 'POST') {
+    return new Response(
+      JSON.stringify({ error: 'Method not allowed' }),
+      { status: 405, headers: responseHeaders }
+    );
   }
 
   try {
-    const { training_data_url, trigger_word, session_id } = await req.json();
+    // Check content type
+    const contentType = req.headers.get('content-type');
+    if (!contentType?.includes('application/json')) {
+      return new Response(
+        JSON.stringify({ error: 'Content-Type must be application/json' }),
+        { status: 400, headers: responseHeaders }
+      );
+    }
+
+    // Parse request body
+    let requestData;
+    try {
+      requestData = await req.json();
+    } catch (err) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid JSON payload' }),
+        { status: 400, headers: responseHeaders }
+      );
+    }
+
+    const { training_data_url, trigger_word, session_id } = requestData;
 
     if (!training_data_url || !trigger_word || !session_id) {
       throw new Error('Missing required fields');
@@ -111,14 +145,16 @@ serve(async (req) => {
     // Start polling
     pollTraining();
 
-    return new Response(JSON.stringify({ training_id: training.id }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ training_id: training.id }),
+      { headers: responseHeaders }
+    );
 
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    console.error('Error:', err);
+    return new Response(
+      JSON.stringify({ error: err.message || 'Internal server error' }),
+      { status: 500, headers: responseHeaders }
+    );
   }
 });
