@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase';
 
 const MIN_IMAGES = 12;
 const MAX_IMAGES = 20;
+const BUCKET_NAME = 'training-images';
 
 const ZIP_REQUIREMENTS = [
   'ZIP file containing 12-20 photos',
@@ -27,13 +28,19 @@ export function Upload() {
   const [isTraining, setIsTraining] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState(0);
   const [error, setError] = useState<string>('');
-  const [userId, setUserId] = useState<string | null>(null);
 
-  // Initialize trigger word
+  // Check authentication and initialize trigger word
   useEffect(() => {
-    setUserId('demo-user'); // Use a demo user ID
+    const checkAuth = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        navigate('/login');
+        return;
+      }
+    };
+    checkAuth();
     regenerateTriggerWord();
-  }, []);
+  }, [navigate]);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -96,47 +103,52 @@ export function Upload() {
   };
 
   const handleSubmit = async () => {
-    if (!userId || !zipFile || !triggerWord) return;
+    if (!zipFile || !triggerWord) return;
 
     try {
       setIsTraining(true);
       setError('');
-
-      const bucketName = 'training-images';
       
-      // First check if bucket exists
-      const { data: buckets } = await supabase.storage.listBuckets();
-      const bucketExists = buckets?.some(b => b.name === bucketName);
+      // Ensure user is authenticated
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setError('Please log in to upload files');
+        navigate('/login');
+        return;
+      }
 
-      if (!bucketExists) {
-        // Create bucket if it doesn't exist
-        const { error: createError } = await supabase.storage.createBucket(bucketName, {
-          public: true,
-          fileSizeLimit: null
-        });
+      // Upload each image from the ZIP file
+      const zip = new JSZip();
+      const contents = await zip.loadAsync(zipFile);
+      const imageFiles = Object.values(contents.files).filter(f => {
+        const isMacSystemFile = f.name.startsWith('__MACOSX/') || f.name.includes('.DS_Store');
+        const isImageFile = !f.dir && f.name.match(/\.(jpg|jpeg|png)$/i);
+        return !isMacSystemFile && isImageFile;
+      });
 
-        if (createError) {
-          throw new Error(`Failed to create bucket: ${createError.message}`);
+      // Create a folder for this training session
+      const folderPath = `${user.id}/${triggerWord}`;
+
+      // Upload each image
+      for (let i = 0; i < imageFiles.length; i++) {
+        const file = imageFiles[i];
+        const imageData = await file.async('blob');
+        const fileName = file.name.split('/').pop() || file.name;
+
+        const { error: uploadError } = await supabase.storage
+          .from(BUCKET_NAME)
+          .upload(`${folderPath}/${fileName}`, imageData, {
+            contentType: 'image/jpeg',
+            upsert: true
+          });
+
+        if (uploadError) {
+          throw new Error(`Failed to upload ${fileName}: ${uploadError.message}`);
         }
+
+        // Update progress
+        setTrainingProgress((i + 1) / imageFiles.length);
       }
-
-      // Upload to the training-images bucket
-      const { error: uploadError } = await supabase.storage
-        .from(bucketName)
-        .upload(`${userId}/${triggerWord}.zip`, zipFile, {
-          cacheControl: '3600',
-          upsert: false
-        });
-
-      // Check for upload errors
-      if (uploadError) {
-        throw new Error(`Failed to upload images: ${uploadError.message}`);
-      }
-
-      // Get the URL of the uploaded file
-      const { data: { publicUrl } } = supabase.storage
-        .from(bucketName)
-        .getPublicUrl(`${userId}/${triggerWord}.zip`);
 
       // Start the training process
       const response = await fetch('http://localhost:8000/stylize', {
@@ -145,39 +157,25 @@ export function Upload() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          userId,
+          userId: user.id,
           triggerWord,
-          imageUrl: publicUrl,
+          folderPath: `${user.id}/${triggerWord}`,
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`Training failed: ${response.statusText}`);
+        throw new Error('Failed to start training process');
       }
 
       const result = await response.json();
       console.log('Training started:', result);
 
-      // Poll for training status
-      const pollInterval = setInterval(async () => {
-        const pollResponse = await fetch(`http://localhost:8000/status/${result.id}`);
-        const pollResult = await pollResponse.json();
-
-        if (pollResult.status === 'completed') {
-          clearInterval(pollInterval);
-          setIsTraining(false);
-          navigate('/result', { state: { modelId: result.id } });
-        } else if (pollResult.status === 'failed') {
-          clearInterval(pollInterval);
-          setIsTraining(false);
-          setError('Training failed. Please try again.');
-        } else {
-          setTrainingProgress(pollResult.progress || 0);
-        }
-      }, 5000);
+      // Navigate to result page
+      navigate(`/result?userId=${user.id}&triggerWord=${triggerWord}`);
     } catch (err) {
-      console.error('Error during training:', err);
+      console.error('Error during upload:', err);
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+    } finally {
       setIsTraining(false);
     }
   };
