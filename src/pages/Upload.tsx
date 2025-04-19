@@ -145,7 +145,6 @@ export function Upload() {
         if (uploadError) {
           throw new Error(`Failed to upload ${fileName}: ${uploadError.message}`);
         }
-
         // Update progress
         setTrainingProgress((i + 1) / imageFiles.length);
       }
