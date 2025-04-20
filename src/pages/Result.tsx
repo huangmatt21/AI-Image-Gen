@@ -1,13 +1,70 @@
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Download, RefreshCw } from 'lucide-react';
 import { Button } from '../components/Button';
+import { supabase } from '../lib/supabase';
 
 export function Result() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { originalImage, stylizedImage } = location.state || {};
+  const searchParams = new URLSearchParams(location.search);
+  const userId = searchParams.get('userId');
+  const triggerWord = searchParams.get('triggerWord');
+  
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>();
+  const [originalImage, setOriginalImage] = useState<string>();
+  const [stylizedImage, setStylizedImage] = useState<string>();
+
+  useEffect(() => {
+    const loadImages = async () => {
+      if (!userId || !triggerWord) {
+        navigate('/upload');
+        return;
+      }
+
+      try {
+        // Check training status
+        const response = await fetch(`http://localhost:8000/status/${userId}/${triggerWord}`);
+        const status = await response.json();
+
+        if (status.error) {
+          throw new Error(status.error);
+        }
+
+        if (status.status !== 'completed') {
+          throw new Error('Training is still in progress');
+        }
+
+        // Get image URLs from Supabase
+        const { data: originalData, error: originalError } = await supabase.storage
+          .from('training-images')
+          .createSignedUrl(`${userId}/${triggerWord}/original.jpg`, 3600);
+
+        if (originalError) throw originalError;
+
+        const { data: stylizedData, error: stylizedError } = await supabase.storage
+          .from('training-images')
+          .createSignedUrl(`${userId}/${triggerWord}/stylized.jpg`, 3600);
+
+        if (stylizedError) throw stylizedError;
+
+        setOriginalImage(originalData.signedUrl);
+        setStylizedImage(stylizedData.signedUrl);
+      } catch (err) {
+        console.error('Error loading images:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load images');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadImages();
+  }, [userId, triggerWord, navigate]);
 
   const handleDownload = async () => {
+    if (!stylizedImage) return;
+    
     try {
       const response = await fetch(stylizedImage);
       const blob = await response.blob();
@@ -21,12 +78,32 @@ export function Result() {
       document.body.removeChild(a);
     } catch (error) {
       console.error('Failed to download image:', error);
+      setError('Failed to download image');
     }
   };
 
-  if (!originalImage || !stylizedImage) {
-    navigate('/upload');
-    return null;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-4 border-purple-500 border-t-transparent mx-auto"></div>
+          <p className="text-gray-600">Loading your stylized images...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !originalImage || !stylizedImage) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <p className="text-red-500">{error || 'Failed to load images'}</p>
+          <Button onClick={() => navigate('/upload')} variant="outline">
+            Try Again
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (

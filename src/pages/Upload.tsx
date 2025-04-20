@@ -159,18 +159,52 @@ export function Upload() {
           userId: user.id,
           triggerWord,
           folderPath: `${user.id}/${triggerWord}`,
+          imageCount: imageFiles.length,
         }),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to start training process');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to start training process');
       }
 
       const result = await response.json();
       console.log('Training started:', result);
 
-      // Navigate to result page
-      navigate(`/result?userId=${user.id}&triggerWord=${triggerWord}`);
+      // Poll for training status
+      let pollCount = 0;
+      const maxPolls = 60; // 5 minutes maximum (5s * 60)
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await fetch(`http://localhost:8000/status/${user.id}/${triggerWord}`);
+          const statusData = await statusResponse.json();
+
+          if (statusData.error) {
+            clearInterval(pollInterval);
+            throw new Error(statusData.error);
+          }
+
+          if (statusData.status === 'completed') {
+            clearInterval(pollInterval);
+            navigate(`/result?userId=${user.id}&triggerWord=${triggerWord}`);
+          } else if (statusData.status === 'failed') {
+            clearInterval(pollInterval);
+            throw new Error('Training failed. Please try again.');
+          } else {
+            // Update progress
+            setTrainingProgress(statusData.progress || 0);
+          }
+
+          pollCount++;
+          if (pollCount >= maxPolls) {
+            clearInterval(pollInterval);
+            throw new Error('Training timed out. Please try again.');
+          }
+        } catch (err) {
+          clearInterval(pollInterval);
+          throw err;
+        }
+      }, 5000); // Poll every 5 seconds
     } catch (err) {
       console.error('Error during upload:', err);
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
