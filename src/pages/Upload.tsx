@@ -28,6 +28,17 @@ export function Upload() {
   const [isTraining, setIsTraining] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState(0);
   const [error, setError] = useState<string>('');
+  const [pollIntervalId, setPollIntervalId] = useState<NodeJS.Timeout | null>(null);
+
+  // Cleanup polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalId) {
+        clearInterval(pollIntervalId);
+        setPollIntervalId(null);
+      }
+    };
+  }, [pollIntervalId]);
 
   // Check authentication and initialize trigger word
   useEffect(() => {
@@ -154,6 +165,7 @@ export function Upload() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
         },
         body: JSON.stringify({
           userId: user.id,
@@ -174,21 +186,25 @@ export function Upload() {
       // Poll for training status
       let pollCount = 0;
       const maxPolls = 60; // 5 minutes maximum (5s * 60)
-      const pollInterval = setInterval(async () => {
+      const intervalId = setInterval(async () => {
         try {
-          const statusResponse = await fetch(`http://localhost:8000/status/${user.id}/${triggerWord}`);
+          const statusResponse = await fetch(`http://localhost:8000/status/${user.id}/${triggerWord}`, {
+            headers: {
+              'Access-Control-Allow-Origin': '*',
+            }
+          });
           const statusData = await statusResponse.json();
 
           if (statusData.error) {
-            clearInterval(pollInterval);
+            if (intervalId) clearInterval(intervalId);
             throw new Error(statusData.error);
           }
 
           if (statusData.status === 'completed') {
-            clearInterval(pollInterval);
+            if (intervalId) clearInterval(intervalId);
             navigate(`/result?userId=${user.id}&triggerWord=${triggerWord}`);
           } else if (statusData.status === 'failed') {
-            clearInterval(pollInterval);
+            if (intervalId) clearInterval(intervalId);
             throw new Error('Training failed. Please try again.');
           } else {
             // Update progress
@@ -197,19 +213,30 @@ export function Upload() {
 
           pollCount++;
           if (pollCount >= maxPolls) {
-            clearInterval(pollInterval);
+            if (intervalId) clearInterval(intervalId);
             throw new Error('Training timed out. Please try again.');
           }
         } catch (err) {
-          clearInterval(pollInterval);
+          if (pollIntervalId) {
+        clearInterval(pollIntervalId);
+        setPollIntervalId(null);
+      }
           throw err;
         }
       }, 5000); // Poll every 5 seconds
+      
+      setPollIntervalId(intervalId);
     } catch (err) {
       console.error('Error during upload:', err);
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
     } finally {
       setIsTraining(false);
+      setTrainingProgress(0);
+      // Clear any existing intervals
+      if (pollIntervalId) {
+        clearInterval(pollIntervalId);
+        setPollIntervalId(null);
+      }
     }
   };
 
