@@ -40,18 +40,10 @@ export function Upload() {
     };
   }, [pollIntervalId]);
 
-  // Check authentication and initialize trigger word
+  // Initialize trigger word
   useEffect(() => {
-    const checkAuth = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        navigate('/login');
-        return;
-      }
-    };
-    checkAuth();
     regenerateTriggerWord();
-  }, [navigate]);
+  }, []);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -127,7 +119,6 @@ export function Upload() {
         navigate('/login');
         return;
       }
-
       // Upload each image from the ZIP file
       const zip = new JSZip();
       const contents = await zip.loadAsync(zipFile);
@@ -137,11 +128,15 @@ export function Upload() {
         return !isMacSystemFile && isImageFile;
       });
 
+      // Create a unique user ID for this session if not exists
+      const sessionId = localStorage.getItem('sessionId') || Math.random().toString(36).substring(2, 15);
+      localStorage.setItem('sessionId', sessionId);
+
       // Create a folder for this training session
-      const folderPath = `${user.id}/${triggerWord}`;
+      const folderPath = `${sessionId}/${triggerWord}`;
 
       // Upload each image
-      for (let i = 0; i < imageFiles.length; i++) {
+      for (let i = 0; i <imageFiles.length; i++) {
         const file = imageFiles[i];
         const imageData = await file.async('blob');
         const fileName = file.name.split('/').pop() || file.name;
@@ -168,7 +163,7 @@ export function Upload() {
           'Access-Control-Allow-Origin': '*',
         },
         body: JSON.stringify({
-          userId: user.id,
+          userId: sessionId,
           triggerWord,
           folderPath: `${user.id}/${triggerWord}`,
           imageCount: imageFiles.length,
@@ -188,7 +183,7 @@ export function Upload() {
       const maxPolls = 60; // 5 minutes maximum (5s * 60)
       const intervalId = setInterval(async () => {
         try {
-          const statusResponse = await fetch(`http://localhost:8000/status/${user.id}/${triggerWord}`, {
+          const statusResponse = await fetch(`http://localhost:8000/status/${sessionId}/${triggerWord}`, {
             headers: {
               'Access-Control-Allow-Origin': '*',
             }
@@ -202,7 +197,7 @@ export function Upload() {
 
           if (statusData.status === 'completed') {
             if (intervalId) clearInterval(intervalId);
-            navigate(`/result?userId=${user.id}&triggerWord=${triggerWord}`);
+            navigate(`/result?userId=${sessionId}&triggerWord=${triggerWord}`);
           } else if (statusData.status === 'failed') {
             if (intervalId) clearInterval(intervalId);
             throw new Error('Training failed. Please try again.');
