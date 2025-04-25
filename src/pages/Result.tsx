@@ -23,6 +23,13 @@ export function Result() {
         return;
       }
 
+      // Get session ID from localStorage to verify ownership
+      const sessionId = localStorage.getItem('sessionId');
+      if (sessionId !== userId) {
+        navigate('/upload');
+        return;
+      }
+
       try {
         // Check training status
         const response = await fetch(`http://localhost:8000/status/${userId}/${triggerWord}`);
@@ -38,13 +45,13 @@ export function Result() {
 
         // Get image URLs from Supabase
         const { data: originalData, error: originalError } = await supabase.storage
-          .from('training-images')
+          .from('public-images')
           .createSignedUrl(`${userId}/${triggerWord}/original.jpg`, 3600);
 
         if (originalError) throw originalError;
 
         const { data: stylizedData, error: stylizedError } = await supabase.storage
-          .from('training-images')
+          .from('public-images')
           .createSignedUrl(`${userId}/${triggerWord}/stylized.jpg`, 3600);
 
         if (stylizedError) throw stylizedError;

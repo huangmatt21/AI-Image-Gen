@@ -7,7 +7,7 @@ import { supabase } from '../lib/supabase';
 
 const MIN_IMAGES = 12;
 const MAX_IMAGES = 20;
-const BUCKET_NAME = 'training-images';
+const BUCKET_NAME = 'public-images';
 
 const ZIP_REQUIREMENTS = [
   'ZIP file containing 12-20 photos',
@@ -112,13 +112,6 @@ export function Upload() {
       setIsTraining(true);
       setError('');
       
-      // Ensure user is authenticated
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setError('Please log in to upload files');
-        navigate('/login');
-        return;
-      }
       // Upload each image from the ZIP file
       const zip = new JSZip();
       const contents = await zip.loadAsync(zipFile);
@@ -165,7 +158,7 @@ export function Upload() {
         body: JSON.stringify({
           userId: sessionId,
           triggerWord,
-          folderPath: `${user.id}/${triggerWord}`,
+          folderPath: `${sessionId}/${triggerWord}`,
           imageCount: imageFiles.length,
         }),
       });
