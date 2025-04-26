@@ -9,6 +9,13 @@ const MIN_IMAGES = 12;
 const MAX_IMAGES = 20;
 const BUCKET_NAME = 'public-images';
 
+const STYLE_OPTIONS = [
+  { id: 'ghibli', name: 'Ghibli', description: 'Studio Ghibli anime style' },
+  { id: 'simpsons', name: 'Simpsons', description: 'The Simpsons cartoon style' },
+  { id: 'cartoon', name: 'Cartoon', description: 'Modern cartoon style' },
+  { id: 'pixar', name: 'Pixar', description: 'Pixar 3D animation style' },
+];
+
 const ZIP_REQUIREMENTS = [
   'ZIP file containing 12-20 photos',
   'Photos should include:',
@@ -28,6 +35,7 @@ export function Upload() {
   const [isTraining, setIsTraining] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState(0);
   const [error, setError] = useState<string>('');
+  const [selectedStyle, setSelectedStyle] = useState(STYLE_OPTIONS[0].id);
   const [pollIntervalId, setPollIntervalId] = useState<NodeJS.Timeout | null>(null);
 
   // Cleanup polling interval on unmount
@@ -160,6 +168,7 @@ export function Upload() {
           triggerWord,
           folderPath: `${sessionId}/${triggerWord}`,
           imageCount: imageFiles.length,
+          style: selectedStyle,
         }),
       });
 
@@ -316,6 +325,28 @@ export function Upload() {
           {error && (
             <p className="text-red-500 text-center mt-4">{error}</p>
           )}
+
+          {/* Style Selection */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">
+              Select Style
+            </label>
+            <div className="grid grid-cols-2 gap-4">
+              {STYLE_OPTIONS.map((style) => (
+                <button
+                  key={style.id}
+                  onClick={() => setSelectedStyle(style.id)}
+                  className={`p-4 rounded-lg border-2 text-left transition-colors ${selectedStyle === style.id
+                    ? 'border-purple-500 bg-purple-50'
+                    : 'border-gray-200 hover:border-purple-200'
+                    }`}
+                >
+                  <h3 className="font-medium text-gray-900">{style.name}</h3>
+                  <p className="text-sm text-gray-500">{style.description}</p>
+                </button>
+              ))}
+            </div>
+          </div>
 
           {/* Submit Button */}
           <div className="flex justify-end mt-6">

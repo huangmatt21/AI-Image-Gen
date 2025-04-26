@@ -15,6 +15,14 @@ export function Result() {
   const [error, setError] = useState<string>();
   const [originalImage, setOriginalImage] = useState<string>();
   const [stylizedImage, setStylizedImage] = useState<string>();
+  const [retryCount, setRetryCount] = useState(0);
+  const maxRetries = 3;
+
+  const retryLoadImages = () => {
+    setError(undefined);
+    setLoading(true);
+    setRetryCount(count => count + 1);
+  };
 
   useEffect(() => {
     const loadImages = async () => {
@@ -66,8 +74,10 @@ export function Result() {
       }
     };
 
-    loadImages();
-  }, [userId, triggerWord, navigate]);
+    if (retryCount <= maxRetries) {
+      loadImages();
+    }
+  }, [userId, triggerWord, navigate, retryCount]);
 
   const handleDownload = async () => {
     if (!stylizedImage) return;
@@ -105,9 +115,16 @@ export function Result() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center space-y-4">
           <p className="text-red-500">{error || 'Failed to load images'}</p>
-          <Button onClick={() => navigate('/upload')} variant="outline">
-            Try Again
-          </Button>
+          <div className="flex gap-4 justify-center">
+            {retryCount < maxRetries ? (
+              <Button onClick={retryLoadImages} className="bg-purple-600 hover:bg-purple-700 text-white">
+                Retry Loading
+              </Button>
+            ) : null}
+            <Button onClick={() => navigate('/upload')} variant="outline">
+              Back to Upload
+            </Button>
+          </div>
         </div>
       </div>
     );
